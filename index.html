@@ -1,0 +1,1364 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Checkerboard Analysis</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Checkerboard Analysis</h1>
+    <p class="muted">Files are processed in this browser tab only. Nothing is uploaded.</p>
+    <div class="session-bar">
+      <button type="button" id="session-export" class="secondary">Export session</button>
+      <label class="button-like secondary" id="session-import-label">Import session
+        <input type="file" id="session-import" accept=".json,application/json">
+      </label>
+      <span class="small muted">A session file holds the raw reads, layouts and settings, so you can reopen the analysis later.</span>
+    </div>
+    <p class="msg" id="session-msg" hidden></p>
+  </header>
+
+  <div class="app">
+    <!-- Sidebar: plates and repeat groups -->
+    <aside class="sidebar" aria-label="Plates and repeat groups">
+      <section>
+        <h2 class="side-title">Plates</h2>
+        <ul class="side-list" id="plate-list"></ul>
+        <div class="side-actions">
+          <button type="button" id="add-plate">+ Add plate</button>
+        </div>
+        <div class="side-actions" id="plate-actions">
+          <button type="button" id="rename-plate" class="secondary">Rename</button>
+          <button type="button" id="duplicate-plate" class="secondary">Duplicate</button>
+          <button type="button" id="delete-plate" class="secondary danger">Delete</button>
+        </div>
+      </section>
+      <section>
+        <h2 class="side-title">Repeat groups</h2>
+        <ul class="side-list" id="group-list"></ul>
+        <p class="muted small">Plates group when the drug pair and both concentration lists match. Set a group label on a plate to override.</p>
+      </section>
+    </aside>
+
+    <main id="main">
+      <!-- ======================= Plate view ======================= -->
+      <div id="plate-view">
+        <div class="plate-head">
+          <label>Plate name
+            <input type="text" id="plate-name" size="24">
+          </label>
+        </div>
+
+        <!-- 1. Files and reads -->
+        <section class="panel" aria-labelledby="h-files">
+          <h2 id="h-files">1. Files and reads</h2>
+          <label class="drop" id="drop">
+            <input type="file" id="file-input" accept=".xlsx" multiple>
+            <span><strong>Drop Tecan Spark .xlsx files here</strong> or click to choose. Add every file for this plate (initial read included).</span>
+          </label>
+          <details class="paste" id="paste-box">
+            <summary>Paste a grid instead</summary>
+            <p class="muted small">8 lines (rows A–H) of 12 numbers, separated by tabs, commas or spaces. A 1–12 header line and A–H row labels are allowed, so a block copied from Excel works.</p>
+            <label class="block">Plate values (OD)
+              <textarea id="paste-text" rows="9" spellcheck="false"></textarea>
+            </label>
+            <fieldset class="row">
+              <legend>When was this read taken?</legend>
+              <label class="check"><input type="radio" name="paste-mode" value="hours" checked> Hours after the earliest read</label>
+              <input type="number" id="paste-hours" step="0.1" min="0" value="0" aria-label="Hours after the earliest read">
+              <label class="check"><input type="radio" name="paste-mode" value="datetime"> Date and time</label>
+              <input type="datetime-local" id="paste-datetime" step="1" aria-label="Date and time of the read">
+            </fieldset>
+            <div class="row">
+              <label>Label (optional)
+                <input type="text" id="paste-label" size="20" placeholder="e.g. 48 h read">
+              </label>
+              <button type="button" id="paste-add">Add pasted read</button>
+            </div>
+          </details>
+          <div id="file-messages" role="status" aria-live="polite"></div>
+          <div id="reads-wrap" hidden>
+            <p class="muted small">Times come from the Start Time inside each file, never from the filename. t0 defaults to the earliest read and the analysis read to the latest.</p>
+            <div class="table-scroll">
+              <table class="reads">
+                <thead>
+                  <tr><th scope="col">t0</th><th scope="col">Analyse</th><th scope="col">File</th><th scope="col">Time since t0</th><th scope="col">Source</th><th scope="col">Lid</th><th scope="col">Temp. (°C)</th></tr>
+                </thead>
+                <tbody id="reads-body"></tbody>
+              </table>
+            </div>
+            <button type="button" id="clear-files" class="secondary">Remove all files</button>
+          </div>
+        </section>
+
+        <!-- 2. Layout -->
+        <section class="panel" aria-labelledby="h-layout">
+          <h2 id="h-layout">2. Layout</h2>
+          <div class="row">
+            <label>Preset
+              <select id="layout-select"></select>
+            </label>
+            <label>Drug A (columns)
+              <input type="text" id="drug-a" size="8">
+            </label>
+            <label>Drug B (rows)
+              <input type="text" id="drug-b" size="8">
+            </label>
+            <label>Repeat group
+              <input type="text" id="plate-group" size="18" list="group-labels" placeholder="Automatic">
+              <datalist id="group-labels"></datalist>
+            </label>
+          </div>
+          <p class="muted small" id="layout-summary"></p>
+          <div class="side-actions">
+            <button type="button" id="layout-new" class="secondary">New layout</button>
+            <button type="button" id="layout-copy" class="secondary">Edit a copy</button>
+            <button type="button" id="layout-edit" class="secondary">Edit</button>
+            <button type="button" id="layout-delete" class="secondary danger">Delete saved layout</button>
+          </div>
+          <p class="msg" id="layout-msg" hidden></p>
+          <div id="layout-editor" class="editor" hidden></div>
+        </section>
+
+        <!-- 3. Correction settings (shared by all plates) -->
+        <section class="panel" aria-labelledby="h-settings">
+          <h2 id="h-settings">3. Correction</h2>
+          <div class="row">
+            <label class="check"><input type="checkbox" id="use-t0" checked> Subtract the t0 read</label>
+            <label class="check"><input type="checkbox" id="use-drift" checked> Subtract per-row cell-free drift</label>
+            <label>Reference
+              <select id="reference">
+                <option value="drugfree">Drug-free well</option>
+                <option value="solventfreeMean">Mean of solvent-free wells</option>
+              </select>
+            </label>
+          </div>
+          <p class="muted small">Correction, cut-off and method settings apply to every plate.</p>
+        </section>
+
+        <!-- 4. Methods -->
+        <section class="panel" aria-labelledby="h-methods">
+          <h2 id="h-methods">4. Methods</h2>
+          <div class="row" id="method-checks"></div>
+        </section>
+
+        <!-- 5. Results -->
+        <section aria-labelledby="h-results">
+          <h2 id="h-results" class="section-title">5. Results</h2>
+          <div id="results"><p class="muted">Add files to see results.</p></div>
+        </section>
+
+        <!-- 6. Export -->
+        <section class="panel" aria-labelledby="h-export">
+          <h2 id="h-export">6. Export</h2>
+          <div class="side-actions">
+            <button type="button" id="exp-growth">Growth CSV</button>
+            <button type="button" id="exp-results">Results CSV</button>
+          </div>
+          <p class="msg" id="export-msg" hidden></p>
+          <p class="muted small">Each heatmap has its own SVG and PNG buttons. Files are saved by your browser; nothing leaves this computer.</p>
+        </section>
+      </div>
+
+      <!-- ======================= Group view ======================= -->
+      <div id="group-view" hidden></div>
+    </main>
+  </div>
+
+  <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+
+  <!-- Vendored, pinned SheetJS (no CDN at runtime). -->
+  <script src="js/vendor/xlsx.full.min.js"></script>
+  <!-- Pure modules, in dependency order. Each attaches to window.CB. -->
+  <script src="js/parse.js"></script>
+  <script src="js/layout.js"></script>
+  <script src="js/correct.js"></script>
+  <script src="js/methods/index.js"></script>
+  <script src="js/methods/fici.js"></script>
+  <script src="js/methods/bliss.js"></script>
+  <script src="js/methods/hsa.js"></script>
+  <script src="js/pool.js"></script>
+  <script src="js/export.js"></script>
+  <script>
+  'use strict';
+  // UI only: state, DOM and rendering. All maths lives in the CB modules.
+  (function () {
+    const { parse: P, layout: L, correct: C, methods: M, pool: Pool, export: X } = window.CB;
+    const $ = (id) => document.getElementById(id);
+    const SVGNS = 'http://www.w3.org/2000/svg';
+
+    // ------------------------------------------------------------ state
+    // Plate = { id, name, pair, layoutId, reads, t0Index, analysisReadIndex, group, messages }
+    const plates = [];
+    let plate = null;                       // the plate shown in the plate view
+    let view = { type: 'plate' };           // or { type: 'group', key }
+    let plateSeq = 0;
+    const settings = { cutoff: 0.95, useT0: true, useDrift: true, reference: 'drugfree' };
+    const enabled = { fici: true, bliss: true, hsa: true };
+
+    function newPlate(name) {
+      plateSeq += 1;
+      while (plates.some((p) => p.id === 'p' + plateSeq)) plateSeq += 1;
+      return {
+        id: 'p' + plateSeq, name: name || 'Plate ' + plateSeq,
+        pair: null, layoutId: L.PRESETS[0].id,
+        reads: [], t0Index: 0, analysisReadIndex: 0,
+        group: '', messages: [],
+      };
+    }
+
+    // ------------------------------------------------------------ formatting
+    const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    function fmtConc(x) {
+      if (x === 0) return '0';
+      if (x >= 100) return String(+x.toFixed(1));
+      return String(+x.toPrecision(3));
+    }
+    const fmtPct = (g) => {
+      const p = g * 100;
+      if (!isFinite(p)) return '–';
+      const s = Math.abs(p) < 10 ? p.toFixed(1) : p.toFixed(0);
+      return /^-0(\.0)?$/.test(s) ? s.slice(1) : s; // no "-0.0"
+    };
+    const fmtFici = (f) => (f === null || f === undefined || !isFinite(f)) ? '–' : f.toFixed(4);
+    const hoursOf = (i, p) => { p = p || plate; return P.hoursSince(p.reads[p.t0Index], p.reads[i]); };
+    const currentLayout = (p) => getLayout((p || plate).layoutId) || L.PRESETS[0];
+    const pad2 = (n) => (n < 10 ? '0' : '') + n;
+    const fmtDate = (d) => d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+
+    function pairOf(p) {
+      p = p || plate;
+      if (!p.pair) p.pair = JSON.parse(JSON.stringify(currentLayout(p).pair));
+      return p.pair;
+    }
+
+    // ------------------------------------------------------------ files
+    async function addFiles(fileList) {
+      const target = plate; // files go to the plate shown when they were dropped
+      const files = Array.from(fileList).filter((f) => f.name);
+      for (const f of files) {
+        if (target.reads.some((r) => r.file === f.name)) {
+          target.messages.push({ kind: 'warn', text: f.name + ' is already loaded; skipped.' });
+          continue;
+        }
+        try {
+          const res = P.parseSpark(await f.arrayBuffer(), f.name);
+          target.reads.push(...res.reads);
+          res.warnings.forEach((w) => target.messages.push({ kind: 'warn', text: w }));
+          target.messages.push({ kind: 'ok', text: f.name + ': ' + res.reads.length + ' read' + (res.reads.length === 1 ? '' : 's') + '.' });
+        } catch (err) {
+          target.messages.push({ kind: 'error', text: f.name + ': ' + err.message });
+        }
+      }
+      target.reads = P.sortReads(target.reads);
+      target.t0Index = 0;
+      target.analysisReadIndex = Math.max(0, target.reads.length - 1);
+      renderAll();
+    }
+
+    function renderFileMessages() {
+      $('file-messages').innerHTML = plate.messages.slice(-12).map((m) =>
+        '<p class="msg msg-' + m.kind + '">' + esc(m.text) + '</p>').join('');
+    }
+
+    function renderReads() {
+      $('reads-wrap').hidden = plate.reads.length === 0;
+      const body = $('reads-body');
+      body.innerHTML = '';
+      plate.reads.forEach((r, i) => {
+        const tr = document.createElement('tr');
+        if (i === plate.analysisReadIndex) tr.className = 'is-analysis';
+        tr.innerHTML =
+          '<td><input type="radio" name="t0" value="' + i + '"' + (i === plate.t0Index ? ' checked' : '') +
+            ' aria-label="Use read ' + (i + 1) + ' as t0"></td>' +
+          '<td><input type="radio" name="analysis" value="' + i + '"' + (i === plate.analysisReadIndex ? ' checked' : '') +
+            ' aria-label="Analyse read ' + (i + 1) + '"></td>' +
+          '<td>' + esc(r.file) + '</td>' +
+          '<td class="num">' + hoursOf(i).toFixed(1) + ' h</td>' +
+          '<td>' + esc(r.source) + (r.cycle !== undefined ? ' (cycle ' + r.cycle + ')' : '') + '</td>' +
+          '<td>' + esc(r.lid || '–') + '</td>' +
+          '<td class="num">' + (r.temp !== undefined ? r.temp.toFixed(1) : '–') + '</td>';
+        body.appendChild(tr);
+      });
+    }
+
+    // ------------------------------------------------------------ plate list + actions
+    function selectPlate(p) {
+      plate = p;
+      editor = null; renderEditor(); layoutMsg('ok', '');
+      view = { type: 'plate' };
+      renderAll();
+    }
+
+    function addPlate() {
+      const p = newPlate();
+      plates.push(p);
+      selectPlate(p);
+      $('plate-name').focus();
+      $('plate-name').select();
+    }
+
+    function duplicatePlate() {
+      const copy = newPlate(plate.name + ' (copy)');
+      copy.pair = plate.pair ? JSON.parse(JSON.stringify(plate.pair)) : null;
+      copy.layoutId = plate.layoutId;
+      copy.reads = plate.reads.slice(); // reads are never mutated, so sharing them is safe
+      copy.t0Index = plate.t0Index;
+      copy.analysisReadIndex = plate.analysisReadIndex;
+      copy.group = plate.group;
+      plates.splice(plates.indexOf(plate) + 1, 0, copy);
+      selectPlate(copy);
+    }
+
+    function deletePlate() {
+      if (!window.confirm('Delete "' + plate.name + '" and its loaded reads from this session?')) return;
+      const i = plates.indexOf(plate);
+      plates.splice(i, 1);
+      if (!plates.length) plates.push(newPlate());
+      selectPlate(plates[Math.min(i, plates.length - 1)]);
+    }
+
+    function renamePlate() {
+      const name = window.prompt('Plate name', plate.name);
+      if (name !== null && name.trim()) { plate.name = name.trim(); renderAll(); }
+    }
+
+    function groupsNow() {
+      return Pool.groupPlates(plates.map((p) => { pairOf(p); return p; }), (p) => currentLayout(p));
+    }
+
+    function renderSidebar() {
+      const pl = $('plate-list');
+      pl.innerHTML = '';
+      plates.forEach((p) => {
+        const li = document.createElement('li');
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'side-item' + (view.type === 'plate' && p === plate ? ' active' : '');
+        if (view.type === 'plate' && p === plate) b.setAttribute('aria-current', 'page');
+        b.innerHTML = '<span class="side-name">' + esc(p.name) + '</span><span class="side-meta">' +
+          (p.reads.length ? p.reads.length + ' read' + (p.reads.length === 1 ? '' : 's') : 'no files') + '</span>';
+        b.addEventListener('click', () => selectPlate(p));
+        li.appendChild(b);
+        pl.appendChild(li);
+      });
+      $('plate-actions').hidden = view.type !== 'plate';
+
+      const gl = $('group-list');
+      gl.innerHTML = '';
+      const groups = groupsNow();
+      groups.forEach((g) => {
+        const li = document.createElement('li');
+        const b = document.createElement('button');
+        b.type = 'button';
+        const active = view.type === 'group' && view.key === g.key;
+        b.className = 'side-item' + (active ? ' active' : '');
+        if (active) b.setAttribute('aria-current', 'page');
+        b.innerHTML = '<span class="side-name">' + esc(g.label) + '</span><span class="side-meta">n = ' + g.plateIds.length +
+          (g.custom ? ' · custom' : '') + '</span>';
+        b.addEventListener('click', () => { view = { type: 'group', key: g.key }; renderAll(); });
+        li.appendChild(b);
+        gl.appendChild(li);
+      });
+      if (!groups.length) gl.innerHTML = '<li class="muted small">No plates yet.</li>';
+
+      const labels = [...new Set(plates.map((p) => (p.group || '').trim()).filter(Boolean))];
+      $('group-labels').innerHTML = labels.map((x) => '<option value="' + esc(x) + '">').join('');
+    }
+
+    // ------------------------------------------------------------ layouts: presets + saved custom layouts
+    const LAYOUT_STORE = 'checkerboard-assay.layouts.v1';
+    const customLayouts = [];
+    let storageOK = true;
+
+    function loadCustomLayouts() {
+      let raw = null;
+      try { raw = window.localStorage.getItem(LAYOUT_STORE); } catch (e) { storageOK = false; return; }
+      if (!raw) return;
+      let arr = [];
+      try { arr = JSON.parse(raw); } catch (e) { return; }
+      (Array.isArray(arr) ? arr : []).forEach((o) => {
+        try { customLayouts.push(L.fromJSON(o)); } catch (e) { /* skip a damaged entry */ }
+      });
+    }
+
+    function saveCustomLayouts() {
+      try { window.localStorage.setItem(LAYOUT_STORE, JSON.stringify(customLayouts)); storageOK = true; }
+      catch (e) { storageOK = false; }
+    }
+
+    function getLayout(id) {
+      return L.getPreset(id) || customLayouts.find((l) => l.id === id) || null;
+    }
+
+    function renderLayoutSelect() {
+      const sel = $('layout-select');
+      sel.innerHTML = '<optgroup label="Presets">' + L.PRESETS.map((p) => '<option value="' + esc(p.id) + '">' + esc(p.name) + '</option>').join('') + '</optgroup>' +
+        (customLayouts.length ? '<optgroup label="Saved in this browser">' + customLayouts.map((l) => '<option value="' + esc(l.id) + '">' + esc(l.name) + '</option>').join('') + '</optgroup>' : '');
+      sel.value = plate.layoutId;
+      const isCustom = !L.getPreset(plate.layoutId);
+      $('layout-edit').hidden = !isCustom;
+      $('layout-delete').hidden = !isCustom;
+    }
+
+    function layoutMsg(kind, text) {
+      const m = $('layout-msg');
+      m.hidden = !text;
+      m.className = 'msg msg-' + kind;
+      m.textContent = text || '';
+    }
+
+    // ------------------------------------------------------------ layout editor (SPEC 6.2)
+    const ROLE_INFO = {
+      drugfree: { short: 'DF', label: 'Drug-free (matrix top-left)' },
+      cellfree: { short: 'CF', label: 'Cell-free (drug, no cells), one per row' },
+      solventfree: { short: 'SF', label: 'Solvent-free growth' },
+      sterile: { short: 'ST', label: 'Sterile medium' },
+      unused: { short: '', label: 'Unused / clear' },
+    };
+    let editor = null; // draft while the editor is open
+
+    function drugDraft(d, conc) {
+      return { name: d.name, unit: d.unit, mode: 'list', list: conc.join(', '), top: conc[conc.length - 1], factor: 2, steps: conc.length - 1 };
+    }
+
+    function openEditor(mode) {
+      layoutMsg('ok', '');
+      if (mode === 'new') {
+        const A = L.concSeries(2, 2, 7), B = L.concSeries(100, 2, 7);
+        editor = {
+          editingId: null, name: 'New layout',
+          cols: Object.assign(drugDraft({ name: 'Drug A', unit: 'µg/mL' }, A), { mode: 'series' }),
+          rows: Object.assign(drugDraft({ name: 'Drug B', unit: 'µM' }, B), { mode: 'series' }),
+          roles: { A1: 'drugfree' }, brush: 'cellfree', focus: 'A1',
+        };
+      } else {
+        const l = currentLayout(), pair = pairOf();
+        editor = {
+          editingId: mode === 'edit' ? l.id : null,
+          name: mode === 'edit' ? l.name : l.name.replace(/ \(copy\)$/, '') + ' (copy)',
+          cols: drugDraft(pair.A, l.A), rows: drugDraft(pair.B, l.B),
+          roles: Object.assign({}, l.roles), brush: 'cellfree', focus: 'A1',
+        };
+      }
+      renderEditor();
+      const n = $('ed-name'); if (n) { n.focus(); n.select(); }
+    }
+
+    function draftConcs(d) {
+      try {
+        return { conc: d.mode === 'series' ? L.concSeries(+d.top, +d.factor, +d.steps) : L.parseConcList(d.list), error: null };
+      } catch (e) { return { conc: null, error: e.message }; }
+    }
+
+    function draftBuild() {
+      const a = draftConcs(editor.cols), b = draftConcs(editor.rows);
+      const errors = [];
+      if (a.error) errors.push('Drug along columns: ' + a.error);
+      if (b.error) errors.push('Drug along rows: ' + b.error);
+      const built = L.buildLayout({
+        id: editor.editingId || 'draft', name: editor.name,
+        A: a.conc || [0], B: b.conc || [0],
+        pair: { A: { name: editor.cols.name, unit: editor.cols.unit }, B: { name: editor.rows.name, unit: editor.rows.unit } },
+        roles: editor.roles,
+      }, { useDrift: settings.useDrift });
+      return { layout: built.layout, errors: errors.concat(a.error || b.error ? [] : built.errors), concsOK: !a.error && !b.error };
+    }
+
+    function drugFields(key, title) {
+      const d = editor[key];
+      const id = (s) => 'ed-' + key + '-' + s;
+      return '<fieldset class="drug-fields"><legend>' + title + '</legend>' +
+        '<div class="row">' +
+          '<label>Name <input type="text" id="' + id('name') + '" size="10" value="' + esc(d.name) + '"></label>' +
+          '<label>Unit <input type="text" id="' + id('unit') + '" size="7" value="' + esc(d.unit) + '"></label>' +
+        '</div>' +
+        '<div class="row">' +
+          '<label class="check"><input type="radio" name="' + id('mode') + '" value="series"' + (d.mode === 'series' ? ' checked' : '') + '> Dilution series</label>' +
+          '<label class="check"><input type="radio" name="' + id('mode') + '" value="list"' + (d.mode === 'list' ? ' checked' : '') + '> Typed list</label>' +
+        '</div>' +
+        (d.mode === 'series'
+          ? '<div class="row"><label>Top <input type="number" id="' + id('top') + '" step="any" min="0" value="' + esc(d.top) + '"></label>' +
+            '<label>Dilution factor <input type="number" id="' + id('factor') + '" step="any" min="1" value="' + esc(d.factor) + '"></label>' +
+            '<label>Steps (non-zero) <input type="number" id="' + id('steps') + '" step="1" min="1" max="11" value="' + esc(d.steps) + '"></label></div>'
+          : '<label class="block">Concentrations (0 is added first if missing) <input type="text" id="' + id('list') + '" value="' + esc(d.list) + '"></label>') +
+        '<p class="small muted" id="' + id('preview') + '"></p>' +
+      '</fieldset>';
+    }
+
+    function renderEditor() {
+      const box = $('layout-editor');
+      if (!editor) { box.hidden = true; box.innerHTML = ''; return; }
+      box.hidden = false;
+      box.innerHTML =
+        '<h3>' + (editor.editingId ? 'Edit layout' : 'New layout') + '</h3>' +
+        '<label>Layout name <input type="text" id="ed-name" size="28" value="' + esc(editor.name) + '"></label>' +
+        '<div class="drug-grid">' + drugFields('cols', 'Drug along the columns (A)') + drugFields('rows', 'Drug along the rows (B)') + '</div>' +
+        '<button type="button" id="ed-swap" class="secondary">Swap orientation (exchange the column and row drugs)</button>' +
+        '<h4>Well roles</h4>' +
+        '<p class="small muted">Choose a role, then click wells. Click a row letter or column number to fill that row or column (matrix wells are skipped). ' +
+          'The drug-free well is the matrix top-left; the matrix (M) extends right and down from it. Arrow keys move between wells.</p>' +
+        '<div class="brushes" role="radiogroup" aria-label="Role to assign">' +
+          Object.keys(ROLE_INFO).map((r) => '<label class="brush"><input type="radio" name="ed-brush" value="' + r + '"' + (editor.brush === r ? ' checked' : '') + '>' +
+            '<span class="chip role-' + r + '">' + (ROLE_INFO[r].short || '–') + '</span> ' + esc(ROLE_INFO[r].label) + '</label>').join('') +
+        '</div>' +
+        '<div class="plate-map-wrap"><div class="plate-map" id="ed-map"></div></div>' +
+        '<p class="small muted legend-line"><span class="chip role-matrix">M</span> matrix well (drug combination) ' +
+          '<span class="chip role-drugfree">DF</span> drug-free <span class="chip role-cellfree">CF</span> cell-free <span class="chip role-solventfree">SF</span> solvent-free <span class="chip role-sterile">ST</span> sterile</p>' +
+        '<div id="ed-errors" role="status" aria-live="polite"></div>' +
+        '<div class="side-actions"><button type="button" id="ed-save">Save layout</button><button type="button" id="ed-cancel" class="secondary">Cancel</button></div>' +
+        '<p class="small muted">' + (storageOK ? 'Saved layouts are kept in this browser only.' : 'Browser storage is unavailable, so saved layouts last for this session only.') + '</p>';
+
+      // inputs
+      const bind = (idv, fn, ev) => { const e = $(idv); if (e) e.addEventListener(ev || 'input', fn); };
+      bind('ed-name', (e) => { editor.name = e.target.value; refreshEditor(); });
+      ['cols', 'rows'].forEach((k) => {
+        ['name', 'unit', 'top', 'factor', 'steps', 'list'].forEach((f) => bind('ed-' + k + '-' + f, (e) => { editor[k][f] = e.target.value; refreshEditor(); }));
+        box.querySelectorAll('input[name="ed-' + k + '-mode"]').forEach((r) => r.addEventListener('change', (e) => {
+          // carry the current concentrations across when switching mode
+          const c = draftConcs(editor[k]).conc;
+          if (c && e.target.value === 'list') editor[k].list = c.join(', ');
+          if (c && e.target.value === 'series') { editor[k].top = c[c.length - 1]; editor[k].steps = c.length - 1; }
+          editor[k].mode = e.target.value;
+          renderEditor();
+        }));
+      });
+      bind('ed-swap', () => { const t = editor.cols; editor.cols = editor.rows; editor.rows = t; renderEditor(); }, 'click');
+      box.querySelectorAll('input[name="ed-brush"]').forEach((r) => r.addEventListener('change', (e) => { editor.brush = e.target.value; }));
+      bind('ed-cancel', () => { editor = null; renderEditor(); }, 'click');
+      bind('ed-save', saveEditor, 'click');
+      refreshEditor();
+    }
+
+    function applyRole(id, role) {
+      if (role === 'drugfree') {
+        Object.keys(editor.roles).forEach((k) => { if (editor.roles[k] === 'drugfree') delete editor.roles[k]; });
+        editor.roles[id] = 'drugfree';
+      } else if (role === 'unused') {
+        delete editor.roles[id];
+      } else {
+        editor.roles[id] = role;
+      }
+    }
+
+    function refreshEditor() {
+      const b = draftBuild();
+      ['cols', 'rows'].forEach((k) => {
+        const c = draftConcs(editor[k]), el = $('ed-' + k + '-preview');
+        if (el) el.textContent = c.conc ? c.conc.length + ' concentrations: ' + c.conc.map(fmtConc).join(', ') : c.error;
+      });
+      renderMap(b.layout, b.concsOK);
+      const errs = $('ed-errors');
+      errs.innerHTML = b.errors.length
+        ? '<ul class="wlist">' + b.errors.map((e) => '<li class="w w-error">' + esc(e) + '</li>').join('') + '</ul>'
+        : '<p class="msg msg-ok">Layout is valid: ' + b.layout.nRows + ' × ' + b.layout.nCols + ' matrix from ' + L.wellId(b.layout.matrixOrigin.row, b.layout.matrixOrigin.col) + '.</p>';
+      $('ed-save').disabled = b.errors.length > 0;
+    }
+
+    function renderMap(layout, concsOK) {
+      const map = $('ed-map');
+      const inMatrix = (row, col) => concsOK && !!L.matrixIndex(layout, row, col) && !(row === layout.matrixOrigin.row && col === layout.matrixOrigin.col);
+      let html = '<div class="pm-corner"></div>';
+      for (let c = 0; c < 12; c++) html += '<button type="button" class="pm-head" data-col="' + c + '" tabindex="-1" aria-label="Fill column ' + (c + 1) + '">' + (c + 1) + '</button>';
+      for (let r = 0; r < 8; r++) {
+        html += '<button type="button" class="pm-head" data-row="' + r + '" tabindex="-1" aria-label="Fill row ' + 'ABCDEFGH'[r] + '">' + 'ABCDEFGH'[r] + '</button>';
+        for (let c = 0; c < 12; c++) {
+          const id = L.wellId(r, c);
+          const role = editor.roles[id] || (inMatrix(r, c) ? 'matrix' : 'unused');
+          const clash = inMatrix(r, c) && editor.roles[id] && editor.roles[id] !== 'drugfree';
+          const short = role === 'matrix' ? 'M' : (ROLE_INFO[role] ? ROLE_INFO[role].short : '');
+          const label = id + ': ' + (role === 'matrix' ? 'matrix well' : ROLE_INFO[role].label) + (clash ? ', conflicts with the matrix' : '');
+          html += '<button type="button" class="pm-well role-' + role + (clash ? ' clash' : '') + '" data-well="' + id + '" tabindex="' + (id === editor.focus ? 0 : -1) +
+            '" aria-label="' + esc(label) + '" title="' + esc(label) + '">' + short + '</button>';
+        }
+      }
+      map.innerHTML = html;
+
+      map.querySelectorAll('.pm-well').forEach((b) => b.addEventListener('click', () => {
+        editor.focus = b.dataset.well;
+        applyRole(b.dataset.well, editor.brush);
+        refreshEditor();
+        const again = map.querySelector('[data-well="' + editor.focus + '"]'); if (again) again.focus();
+      }));
+      map.querySelectorAll('.pm-head').forEach((b) => b.addEventListener('click', () => {
+        if (editor.brush === 'drugfree') { layoutMsg('warn', 'The drug-free role goes on a single well, not a whole row or column.'); return; }
+        layoutMsg('ok', '');
+        for (let i = 0; i < (b.dataset.row !== undefined ? 12 : 8); i++) {
+          const r = b.dataset.row !== undefined ? +b.dataset.row : i, c = b.dataset.col !== undefined ? +b.dataset.col : i;
+          if (inMatrix(r, c) || editor.roles[L.wellId(r, c)] === 'drugfree') continue;
+          applyRole(L.wellId(r, c), editor.brush);
+        }
+        refreshEditor();
+      }));
+      map.addEventListener('keydown', (e) => {
+        const k = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[e.key];
+        if (!k || !e.target.dataset.well) return;
+        e.preventDefault();
+        const p = L.parseWellId(e.target.dataset.well);
+        const r = Math.max(0, Math.min(7, p.row + k[0])), c = Math.max(0, Math.min(11, p.col + k[1]));
+        editor.focus = L.wellId(r, c);
+        map.querySelectorAll('.pm-well').forEach((w) => { w.tabIndex = w.dataset.well === editor.focus ? 0 : -1; });
+        map.querySelector('[data-well="' + editor.focus + '"]').focus();
+      });
+    }
+
+    function saveEditor() {
+      const b = draftBuild();
+      if (b.errors.length) return;
+      const l = b.layout;
+      l.id = editor.editingId || 'custom-' + Date.now().toString(36);
+      const i = customLayouts.findIndex((x) => x.id === l.id);
+      if (i >= 0) customLayouts[i] = l; else customLayouts.push(l);
+      saveCustomLayouts();
+      plate.layoutId = l.id;
+      plate.pair = JSON.parse(JSON.stringify(l.pair));
+      editor = null;
+      renderEditor();
+      renderAll();
+      layoutMsg('ok', 'Saved "' + l.name + '"' + (storageOK ? ' in this browser.' : ' for this session (browser storage unavailable).'));
+    }
+
+    function deleteCustomLayout() {
+      const l = currentLayout();
+      if (L.getPreset(l.id)) return;
+      const users = plates.filter((p) => p.layoutId === l.id && p !== plate);
+      if (users.length) { layoutMsg('warn', 'Other plates use this layout (' + users.map((p) => p.name).join(', ') + '). Switch them to another layout first.'); return; }
+      if (!window.confirm('Delete the saved layout "' + l.name + '" from this browser?')) return;
+      customLayouts.splice(customLayouts.findIndex((x) => x.id === l.id), 1);
+      saveCustomLayouts();
+      plate.layoutId = L.PRESETS[0].id;
+      plate.pair = null;
+      layoutMsg('ok', 'Deleted "' + l.name + '".');
+      renderAll();
+    }
+
+    // ------------------------------------------------------------ pasted grid (SPEC 4.6)
+    function addPasted() {
+      const mode = document.querySelector('input[name="paste-mode"]:checked').value;
+      let start;
+      if (mode === 'hours') {
+        const h = parseFloat($('paste-hours').value);
+        if (!isFinite(h)) { plate.messages.push({ kind: 'error', text: 'Pasted grid: enter the hours after the earliest read.' }); renderAll(); return; }
+        if (!plate.reads.length) {
+          plate.messages.push({ kind: 'error', text: 'Pasted grid: this plate has no reads yet, so there is no earliest read to count hours from. Use "Date and time" for the first read.' });
+          renderAll(); return;
+        }
+        start = new Date(plate.reads[0].start.getTime() + Math.round(h * 3600000));
+      } else {
+        const v = $('paste-datetime').value;
+        const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(v);
+        if (!m) { plate.messages.push({ kind: 'error', text: 'Pasted grid: enter a date and time.' }); renderAll(); return; }
+        start = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
+      }
+      const label = $('paste-label').value.trim() || (mode === 'hours' ? $('paste-hours').value + ' h' : P.formatTimestamp(start));
+      try {
+        const read = P.parsePasted($('paste-text').value, { start, file: 'pasted: ' + label });
+        plate.reads = P.sortReads(plate.reads.concat([read]));
+        plate.t0Index = 0;
+        plate.analysisReadIndex = plate.reads.length - 1;
+        plate.messages.push({ kind: 'ok', text: 'Pasted grid "' + label + '" added.' });
+        $('paste-text').value = '';
+        $('paste-label').value = '';
+      } catch (e) {
+        plate.messages.push({ kind: 'error', text: e.message }); // parser messages already start with "Pasted …"
+      }
+      renderAll();
+    }
+
+    // ------------------------------------------------------------ layout + settings controls
+    function initControls() {
+      const sel = $('layout-select');
+      sel.addEventListener('change', () => {
+        plate.layoutId = sel.value; plate.pair = null;
+        editor = null; renderEditor(); layoutMsg('ok', '');
+        renderAll();
+      });
+      $('layout-new').addEventListener('click', () => openEditor('new'));
+      $('layout-copy').addEventListener('click', () => openEditor('copy'));
+      $('layout-edit').addEventListener('click', () => openEditor('edit'));
+      $('layout-delete').addEventListener('click', deleteCustomLayout);
+      $('paste-add').addEventListener('click', addPasted);
+      $('paste-datetime').addEventListener('input', () => { document.querySelector('input[name="paste-mode"][value="datetime"]').checked = true; });
+      $('paste-hours').addEventListener('input', () => { document.querySelector('input[name="paste-mode"][value="hours"]').checked = true; });
+
+      $('plate-name').addEventListener('input', (e) => { plate.name = e.target.value; renderSidebar(); });
+      $('plate-group').addEventListener('change', (e) => { plate.group = e.target.value.trim(); renderSidebar(); });
+      $('drug-a').addEventListener('input', (e) => { pairOf().A.name = e.target.value; renderSidebar(); renderResults(); });
+      $('drug-b').addEventListener('input', (e) => { pairOf().B.name = e.target.value; renderSidebar(); renderResults(); });
+
+      $('use-t0').addEventListener('change', (e) => { settings.useT0 = e.target.checked; renderResults(); });
+      $('use-drift').addEventListener('change', (e) => { settings.useDrift = e.target.checked; renderResults(); });
+      $('reference').addEventListener('change', (e) => { settings.reference = e.target.value; renderResults(); });
+
+      const mc = $('method-checks');
+      M.list().forEach((m) => {
+        const lab = document.createElement('label');
+        lab.className = 'check';
+        lab.innerHTML = '<input type="checkbox" value="' + esc(m.id) + '"' + (enabled[m.id] ? ' checked' : '') + '> ' + esc(m.label);
+        lab.querySelector('input').addEventListener('change', (e) => { enabled[m.id] = e.target.checked; renderResults(); });
+        mc.appendChild(lab);
+      });
+
+      $('reads-body').addEventListener('change', (e) => {
+        const t = e.target;
+        if (t.name === 't0') plate.t0Index = +t.value;
+        if (t.name === 'analysis') plate.analysisReadIndex = +t.value;
+        renderReads(); renderResults();
+      });
+
+      const input = $('file-input'), drop = $('drop');
+      input.addEventListener('change', () => { addFiles(input.files); input.value = ''; });
+      ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
+      ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, () => drop.classList.remove('over')));
+      drop.addEventListener('drop', (e) => { e.preventDefault(); addFiles(e.dataTransfer.files); });
+
+      $('clear-files').addEventListener('click', () => {
+        plate.reads = []; plate.t0Index = 0; plate.analysisReadIndex = 0;
+        plate.messages = [];
+        renderAll();
+      });
+
+      $('add-plate').addEventListener('click', addPlate);
+      $('rename-plate').addEventListener('click', renamePlate);
+      $('duplicate-plate').addEventListener('click', duplicatePlate);
+      $('delete-plate').addEventListener('click', deletePlate);
+    }
+
+    function renderPlateControls() {
+      $('plate-name').value = plate.name;
+      $('plate-group').value = plate.group || '';
+      renderLayoutSelect();
+      $('use-t0').checked = settings.useT0;
+      $('use-drift').checked = settings.useDrift;
+      $('reference').value = settings.reference;
+      $('method-checks').querySelectorAll('input').forEach((i) => { i.checked = !!enabled[i.value]; });
+    }
+
+    function renderLayoutSummary() {
+      const l = currentLayout(), pair = pairOf();
+      $('drug-a').value = pair.A.name;
+      $('drug-b').value = pair.B.name;
+      const roles = ['cellfree', 'solventfree', 'sterile'].map((r) => {
+        const w = L.wellsWithRole(l, r);
+        return w.length ? ({ cellfree: 'cell-free', solventfree: 'solvent-free', sterile: 'sterile' }[r] + ' ' + w[0] + '–' + w[w.length - 1]) : null;
+      }).filter(Boolean);
+      $('layout-summary').textContent =
+        l.nRows + ' × ' + l.nCols + ' matrix from A1 (drug-free). ' +
+        pair.A.name + ' along columns: ' + l.A.map(fmtConc).join(', ') + ' ' + pair.A.unit + '. ' +
+        pair.B.name + ' along rows: ' + l.B.map(fmtConc).join(', ') + ' ' + pair.B.unit + '. ' +
+        'Controls: ' + roles.join('; ') + '.';
+    }
+
+    // ------------------------------------------------------------ analysis (glue only)
+    const FICI = M.get('fici');
+
+    function analyse(p) {
+      p = p || plate;
+      const reads = p.reads;
+      if (!reads.length) return { empty: 'Add files to see results.' };
+      if (p.analysisReadIndex === p.t0Index && settings.useT0) {
+        return { empty: 'The analysis read is the t0 read. Choose a later read to analyse.' };
+      }
+      const layout = currentLayout(p);
+      const t0 = reads[p.t0Index], tx = reads[p.analysisReadIndex];
+      const corrFor = (read) => C.correct({ t0: settings.useT0 ? t0.grid : null, tx: read.grid, layout, settings });
+      const corr = corrFor(tx);
+
+      // reads for the FICI time-sensitivity table: after t0; kinetic runs hourly only
+      const allReadsFrac = FICI.timeSensitivityReads(reads, p.t0Index)
+        .filter((i) => reads[i].start > t0.start)
+        .map((i) => ({
+          hours: hoursOf(i, p),
+          label: reads[i].file + (reads[i].cycle !== undefined ? ' · cycle ' + reads[i].cycle : ''),
+          frac: corrFor(reads[i]).frac,
+          isAnalysis: i === p.analysisReadIndex,
+        }));
+
+      const ctx = { frac: corr.frac, A: layout.A, B: layout.B, settings, plate: p, allReadsFrac };
+      const results = {};
+      M.list().forEach((m) => { if (enabled[m.id]) results[m.id] = m.run(ctx); });
+      // FICI is always computed for the hover read-out, even when its card is hidden
+      const fici = results.fici || FICI.run(ctx);
+      return { plate: p, pair: pairOf(p), layout, t0, tx, corr, results, fici, allReadsFrac, hours: hoursOf(p.analysisReadIndex, p) };
+    }
+
+    // ------------------------------------------------------------ results
+    const RENDERERS = {}; // keyed by method id (SPEC 3.2)
+
+    function renderResults() {
+      const el = $('results');
+      el.innerHTML = '';
+      hideTip();
+      const a = analyse();
+      if (a.empty) { el.innerHTML = '<p class="muted">' + esc(a.empty) + '</p>'; return; }
+      renderWarnings(el, a);
+      const ids = Object.keys(a.results);
+      if (!ids.length) { el.insertAdjacentHTML('beforeend', '<p class="muted">Choose at least one method.</p>'); return; }
+      ids.forEach((id) => {
+        const card = document.createElement('article');
+        card.className = 'card';
+        card.id = 'card-' + id;
+        el.appendChild(card);
+        (RENDERERS[id] || renderGeneric)(card, a.results[id], a, id);
+      });
+    }
+
+    function renderGeneric(card, res, a, id) {
+      card.innerHTML = '<h3>' + esc(M.get(id).label) + '</h3><p class="muted">No display for this method yet.</p>';
+    }
+
+    // ---------------- plate warnings box (SPEC 7)
+    function renderWarnings(el, a) {
+      const ws = a.corr.warnings;
+      const box = document.createElement('section');
+      box.className = 'card warnings';
+      box.setAttribute('aria-labelledby', 'h-warnings');
+      const items = ws.map((w) => {
+        const kind = w.severity === 'error' ? 'error' : (w.info ? 'info' : 'warn');
+        let extra = '';
+        if (w.code === 'colour-stability') {
+          extra = '<details><summary>Wells</summary><table class="mini"><thead><tr><th>Well</th><th class="num">OD t0</th><th class="num">OD tx</th><th class="num">Change</th></tr></thead><tbody>' +
+            w.wells.map((x) => '<tr><td>' + x.well + '</td><td class="num">' + x.od0.toFixed(4) + '</td><td class="num">' + x.odx.toFixed(4) +
+              '</td><td class="num">' + (x.relChange >= 0 ? '+' : '') + (x.relChange * 100).toFixed(1) + '%</td></tr>').join('') +
+            '</tbody></table></details>';
+        }
+        return '<li class="w w-' + kind + '"><span class="w-tag">' + ({ error: 'Error', info: 'Info', warn: 'Warning' }[kind]) + '</span> ' +
+          esc(w.message) + extra + '</li>';
+      });
+      box.innerHTML = '<h3 id="h-warnings">Warnings</h3>' +
+        (items.length ? '<ul class="wlist">' + items.join('') + '</ul>' : '<p class="muted small">No correction warnings.</p>');
+      el.appendChild(box);
+    }
+
+    // ---------------- shared well read-out (hover and keyboard)
+    function wellInfo(a, r, c, extraLines) {
+      const l = a.layout, pair = a.pair, p = L.matrixPos(l, r, c), id = L.wellId(p.row, p.col);
+      const g = a.corr.frac[r][c], f = a.fici;
+      const lines = [
+        '<strong>' + id + '</strong>',
+        esc(pair.A.name) + ' ' + l.A[c] + ' ' + esc(pair.A.unit) + ', ' + esc(pair.B.name) + ' ' + l.B[r] + ' ' + esc(pair.B.unit),
+        'OD t0 ' + (a.corr.odT0 ? a.corr.odT0[p.row][p.col].toFixed(4) : '–') + ', OD tx ' + a.corr.odTx[p.row][p.col].toFixed(4),
+        'Corrected dOD ' + a.corr.dODcorr[p.row][p.col].toFixed(4),
+        'Growth ' + (g * 100).toFixed(1) + '%' + (f.analysis.inhibited[r][c] ? ' (inhibited at ' + Math.round(f.cutoff * 100) + '%)' : ''),
+      ];
+      if (r > 0 && c > 0) {
+        const fv = l.A[c] / f.micA.mic + l.B[r] / f.micB.mic;
+        const isB = f.boundary.some((w) => w.r === r && w.c === c);
+        lines.push('FICI ' + ((f.micA.bound || f.micB.bound) ? '≤ ' : '') + fv.toFixed(4) + (isB ? ' (boundary well)' : ''));
+      }
+      return lines.concat(extraLines || []).join('<br>');
+    }
+
+    const tip = $('tooltip');
+    function showTip(html, px, py) {
+      tip.innerHTML = html;
+      tip.hidden = false;
+      const w = tip.offsetWidth, h = tip.offsetHeight;
+      tip.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, px + 14)) + window.scrollX + 'px';
+      tip.style.top = (py - h - 10 < 8 ? py + 24 : py - h - 10) + window.scrollY + 'px';
+    }
+    function hideTip() { tip.hidden = true; }
+
+    // ---------------- generic heatmap (SVG at real pixel size)
+    const CELL = 54, LEFT = 86, TOP = 64, PAD = 8;
+
+    function el(name, attrs, text) {
+      const n = document.createElementNS(SVGNS, name);
+      Object.keys(attrs || {}).forEach((k) => n.setAttribute(k, attrs[k]));
+      if (text !== undefined) n.textContent = text;
+      return n;
+    }
+
+    /**
+     * opts = { a, rows: matrix row indices, cols: matrix col indices, label,
+     *          cell(r, c) -> { fill, text, value }, info(r, c) -> html, overlay(svg, geom) }
+     * geom = { x(c), y(r), CELL, has(r, c) } in matrix indices.
+     */
+    function heatmap(opts) {
+      const l = opts.a.layout, pair = opts.pair || opts.a.pair || pairOf(), rows = opts.rows, cols = opts.cols;
+      const W = LEFT + cols.length * CELL + PAD, Hh = TOP + rows.length * CELL + PAD;
+      const svg = el('svg', { width: W, height: Hh, viewBox: '0 0 ' + W + ' ' + Hh, class: 'heatmap', tabindex: '0',
+        role: 'img', 'aria-label': opts.label + ', ' + rows.length + ' by ' + cols.length + ' wells. Use the arrow keys to read wells.' });
+      const geom = {
+        CELL: CELL,
+        x: (c) => LEFT + cols.indexOf(c) * CELL,
+        y: (r) => TOP + rows.indexOf(r) * CELL,
+        has: (r, c) => rows.indexOf(r) >= 0 && cols.indexOf(c) >= 0,
+      };
+
+      svg.appendChild(el('text', { x: LEFT + cols.length * CELL / 2, y: 16, class: 'axis-title', 'text-anchor': 'middle' },
+        pair.A.name + ' (' + pair.A.unit + ') →'));
+      const midY = TOP + rows.length * CELL / 2;
+      svg.appendChild(el('text', { x: 14, y: midY, class: 'axis-title', 'text-anchor': 'middle', transform: 'rotate(-90 14 ' + midY + ')' },
+        pair.B.name + ' (' + pair.B.unit + ') →'));
+      cols.forEach((c) => svg.appendChild(el('text', { x: geom.x(c) + CELL / 2, y: TOP - 10, class: 'tick', 'text-anchor': 'middle' }, fmtConc(l.A[c]))));
+      rows.forEach((r) => svg.appendChild(el('text', { x: LEFT - 8, y: geom.y(r) + CELL / 2 + 4, class: 'tick', 'text-anchor': 'end' }, fmtConc(l.B[r]))));
+
+      rows.forEach((r) => cols.forEach((c) => {
+        const s = opts.cell(r, c), x = geom.x(c), y = geom.y(r);
+        svg.appendChild(el('rect', { x: x, y: y, width: CELL, height: CELL, fill: s.fill, class: 'cell', 'data-r': r, 'data-c': c }));
+        svg.appendChild(el('text', { x: x + CELL / 2, y: y + CELL / 2 + 4, fill: s.text, class: 'cell-val', 'text-anchor': 'middle' }, s.value));
+      }));
+      const grid = el('g', { class: 'gridlines' });
+      for (let i = 0; i <= rows.length; i++) grid.appendChild(el('line', { x1: LEFT, x2: LEFT + cols.length * CELL, y1: TOP + i * CELL, y2: TOP + i * CELL }));
+      for (let j = 0; j <= cols.length; j++) grid.appendChild(el('line', { y1: TOP, y2: TOP + rows.length * CELL, x1: LEFT + j * CELL, x2: LEFT + j * CELL }));
+      svg.appendChild(grid);
+
+      if (opts.overlay) opts.overlay(svg, geom);
+      const focus = el('rect', { class: 'focus-ring', width: CELL, height: CELL, x: -999, y: -999 });
+      svg.appendChild(focus);
+
+      svg.addEventListener('mousemove', (e) => {
+        const t = e.target;
+        if (t.classList && t.classList.contains('cell')) showTip(opts.info(+t.dataset.r, +t.dataset.c), e.clientX, e.clientY);
+        else hideTip();
+      });
+      svg.addEventListener('mouseleave', hideTip);
+
+      let ki = 0, kj = 0;
+      const moveFocus = () => {
+        const r = rows[ki], c = cols[kj];
+        focus.setAttribute('x', geom.x(c)); focus.setAttribute('y', geom.y(r));
+        const b = svg.getBoundingClientRect();
+        showTip(opts.info(r, c), b.left + geom.x(c) + CELL, b.top + geom.y(r));
+      };
+      svg.addEventListener('focus', moveFocus);
+      svg.addEventListener('blur', () => { focus.setAttribute('x', -999); hideTip(); });
+      svg.addEventListener('keydown', (e) => {
+        const k = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[e.key];
+        if (!k) return;
+        e.preventDefault();
+        ki = Math.max(0, Math.min(rows.length - 1, ki + k[0]));
+        kj = Math.max(0, Math.min(cols.length - 1, kj + k[1]));
+        moveFocus();
+      });
+      return svg;
+    }
+
+    const range = (n, from) => Array.from({ length: n - (from || 0) }, (_, i) => i + (from || 0));
+
+    // ---------------- colour scales
+    function growthColour(g) {
+      // single sequential hue: light (no growth) -> dark (full growth); clipped to [0, 1] for display only
+      const t = Math.max(0, Math.min(1, isFinite(g) ? g : 0));
+      const lo = [240, 245, 250], hi = [21, 67, 121];
+      const c = lo.map((v, i) => Math.round(v + (hi[i] - v) * Math.pow(t, 0.85)));
+      return { fill: 'rgb(' + c.join(',') + ')', text: t > 0.45 ? '#ffffff' : '#10202f' };
+    }
+
+    const EXCESS_SCALE_PP = 50; // colour saturates at ±50 pp; printed values are not clipped
+    function excessColour(pp) {
+      // diverging: neutral grey at 0; positive (more inhibition than expected) -> red; negative -> blue
+      const t = Math.min(1, Math.abs(isFinite(pp) ? pp : 0) / EXCESS_SCALE_PP);
+      const zero = [226, 226, 226], pos = [165, 28, 48], neg = [33, 96, 165];
+      const end = pp >= 0 ? pos : neg;
+      const k = Math.pow(t, 0.8);
+      const c = zero.map((v, i) => Math.round(v + (end[i] - v) * k));
+      return { fill: 'rgb(' + c.join(',') + ')', text: k > 0.5 ? '#ffffff' : '#1a1a1a' };
+    }
+
+    const fmtPP = (pp) => {
+      if (!isFinite(pp)) return '–';
+      const s = Math.abs(pp) < 10 ? pp.toFixed(1) : pp.toFixed(0);
+      if (/^-0(\.0)?$/.test(s)) return s.slice(1);
+      return (pp > 0 && !/^0(\.0)?$/.test(s) ? '+' : '') + s;
+    };
+
+    const fmtPP2 = (pp) => (!isFinite(pp) ? '–' : (pp > 0 ? '+' : pp < 0 ? '−' : '') + Math.abs(pp).toFixed(2)); // summaries
+
+    // ---------------- FICI card
+    RENDERERS.fici = function (card, res, a) {
+      const pair = a.pair, l = a.layout, rb = res.robustness;
+      const micTxt = (m, d) => m.bound
+        ? '&gt; ' + fmtConc(m.mic / 2) + ' ' + esc(d.unit) + ' <span class="small">(off-scale; ' + fmtConc(m.mic) + ' used as a bound)</span>'
+        : fmtConc(m.mic) + ' ' + esc(d.unit);
+      const micCell = (v, bound) => bound ? '&gt; ' + fmtConc(v / 2) : fmtConc(v);
+      const ficiTxt = (w) => w ? (w.bound ? '≤ ' : '') + fmtFici(w.fici) : '–';
+      const wellTxt = (w) => w ? L.matrixWellId(l, w.r, w.c) + ' (' + esc(pair.A.name) + ' ' + w.a + ', ' + esc(pair.B.name) + ' ' + w.b + ')' : '–';
+      const ties = res.ficiMin ? res.boundary.filter((w) => w !== res.ficiMin && Math.abs(w.fici - res.ficiMin.fici) < 1e-12) : [];
+
+      // stability flags derived from the tables (comparison only; no maths)
+      const flags = [];
+      const cutClasses = [...new Set(rb.cutoffTable.map((t) => t.class || 'none'))];
+      if (cutClasses.length > 1) {
+        flags.push('The class depends on the cut-off: ' + rb.cutoffTable.map((t) => Math.round(t.cutoff * 100) + '% → ' + (t.class || 'none')).join(', ') + '.');
+      }
+      if (rb.near.length) {
+        flags.push(rb.near.length + ' well' + (rb.near.length > 1 ? 's are' : ' is') + ' within 2 points of the cut-off and can flip an MIC: ' +
+          rb.near.map((n) => L.matrixWellId(l, n.r, n.c) + ' ' + (n.g * 100).toFixed(1) + '%').join(', ') + '.');
+      }
+      if (rb.dilution && new Set(rb.dilution.combos.map((x) => x.class)).size > 1) {
+        flags.push('Moving either MIC by one dilution changes the class (FICImin ' + fmtFici(rb.dilution.min) + '–' + fmtFici(rb.dilution.max) + ').');
+      }
+      if (rb.floorWarning) flags.push(rb.floorWarning);
+
+      const cutRows = rb.cutoffTable.map((t) =>
+        '<tr' + (t.current ? ' class="current"' : '') + '><td class="num">' + Math.round(t.cutoff * 100) + '%' + (t.current ? ' (current)' : '') + '</td>' +
+        '<td class="num">' + micCell(t.micA, t.boundA) + '</td><td class="num">' + micCell(t.micB, t.boundB) + '</td>' +
+        '<td class="num">' + (t.ficiMinBound ? '≤ ' : '') + fmtFici(t.ficiMin) + '</td><td>' + esc(t.class || '–') + '</td></tr>').join('');
+
+      const timeRows = rb.timeTable.map((t, i) => {
+        const cur = a.allReadsFrac[i] && a.allReadsFrac[i].isAnalysis;
+        return '<tr' + (cur ? ' class="current"' : '') + '><td class="num">' + t.hours.toFixed(1) + ' h</td><td>' + esc(t.label || '') + (cur ? ' (analysed)' : '') + '</td>' +
+          '<td class="num">' + micCell(t.micA, t.boundA) + '</td><td class="num">' + micCell(t.micB, t.boundB) + '</td>' +
+          '<td class="num">' + (t.ficiMinBound ? '≤ ' : '') + fmtFici(t.ficiMin) + '</td><td>' + esc(t.class || '–') + '</td></tr>';
+      }).join('');
+
+      const dil = rb.dilution;
+      const dilHtml = dil
+        ? '<p>FICI<sub>min</sub> ranges from <strong>' + fmtFici(dil.min) + '</strong> to <strong>' + fmtFici(dil.max) + '</strong> when each MIC is moved one dilution up or down (boundary wells fixed).</p>' +
+          '<table class="mini"><thead><tr><th class="num">MIC ' + esc(pair.A.name) + '</th><th class="num">MIC ' + esc(pair.B.name) + '</th><th class="num">FICI<sub>min</sub></th><th>Class</th></tr></thead><tbody>' +
+          dil.combos.map((x) => '<tr><td class="num">' + fmtConc(x.micA) + '</td><td class="num">' + fmtConc(x.micB) + '</td><td class="num">' + fmtFici(x.ficiMin) + '</td><td>' + esc(x.class) + '</td></tr>').join('') +
+          '</tbody></table>'
+        : '<p class="muted">No boundary wells, so there is no FICI<sub>min</sub> to perturb.</p>';
+
+      card.innerHTML =
+        '<header class="card-head"><h3>MIC + FICI</h3>' +
+          '<label class="slider">Inhibition cut-off <input type="range" id="cutoff" min="0.50" max="0.99" step="0.01" value="' + res.cutoff + '">' +
+          '<output for="cutoff">' + Math.round(res.cutoff * 100) + '%</output></label></header>' +
+        '<p class="banner">' + esc(rb.banner) + '</p>' +
+        '<p class="muted small">Analysis read: ' + esc(a.tx.file) + ', ' + a.hours.toFixed(1) + ' h after t0. Inhibited: growth ≤ ' + fmtPct(1 - res.cutoff) + '%.</p>' +
+        '<dl class="summary">' +
+          '<div><dt>MIC ' + esc(pair.A.name) + '</dt><dd>' + micTxt(res.micA, pair.A) + '</dd></div>' +
+          '<div><dt>MIC ' + esc(pair.B.name) + '</dt><dd>' + micTxt(res.micB, pair.B) + '</dd></div>' +
+          '<div><dt>FICI<sub>min</sub></dt><dd><strong>' + ficiTxt(res.ficiMin) + '</strong> at ' + wellTxt(res.ficiMin) +
+            (ties.length ? '<br><span class="small">Tied with ' + ties.map(wellTxt).join(', ') + '</span>' : '') + '</dd></div>' +
+          '<div><dt>FICI<sub>max</sub></dt><dd>' + ficiTxt(res.ficiMax) + ' at ' + wellTxt(res.ficiMax) + '</dd></div>' +
+          '<div><dt>Class (Odds 2003)</dt><dd><strong>' + esc(res.class || 'no boundary wells') + '</strong></dd></div>' +
+          '<div><dt>Boundary wells</dt><dd>' + res.boundary.length + '</dd></div>' +
+        '</dl>' +
+        (flags.length ? '<div class="flags" role="note"><strong>Check before interpreting</strong><ul>' + flags.map((f) => '<li>' + esc(f) + '</li>').join('') + '</ul></div>' : '') +
+        ((res.micA.bound || res.micB.bound) ? '<p class="small">An off-scale MIC lies above the top concentration; 2 × top is used in its place, so FICIs that use it are upper bounds (≤).</p>' : '') +
+        '<p class="small muted">' + esc(res.oddsNote) + ' Synergy ≤ 0.5; indifference 0.5–4; antagonism &gt; 4.</p>' +
+        '<div class="heatmap-wrap"></div>' +
+        '<div class="legend small">' +
+          '<span class="legend-item"><span class="key key-boundary"></span> Inhibited region (outlined)</span>' +
+          '<span class="legend-item"><span class="key key-min"></span> FICI<sub>min</sub> well</span>' +
+        '</div>' +
+        '<p class="small muted">Cells show % growth relative to the reference. Colour is clipped to 0–100%; printed values are not.</p>' +
+
+        '<section class="robust" aria-label="Robustness">' +
+          '<h4>Robustness</h4>' +
+          '<div class="robust-grid">' +
+            '<div><h5>1. Attainable floor</h5><p><strong>' + fmtFici(rb.floor) + '</strong> (' + esc(pair.A.name) + ' ' + l.A[1] + ' + ' + esc(pair.B.name) + ' ' + l.B[1] + ', the lowest FICI this plate can show).</p>' +
+              (rb.floorWarning ? '<p class="msg msg-warn">' + esc(rb.floorWarning) + '</p>' : '<p class="muted small">At or below 0.5, so synergy is detectable at this cut-off.</p>') + '</div>' +
+            '<div><h5>4. Near-cut-off wells (±2 points)</h5>' +
+              (rb.near.length
+                ? '<ul class="near">' + rb.near.map((n) => '<li><strong>' + L.matrixWellId(l, n.r, n.c) + '</strong> (' + esc(pair.A.name) + ' ' + l.A[n.c] + ', ' + esc(pair.B.name) + ' ' + l.B[n.r] + '): ' + (n.g * 100).toFixed(1) + '% growth</li>').join('') + '</ul>'
+                : '<p class="muted small">None.</p>') + '</div>' +
+          '</div>' +
+          '<h5>2. Cut-off sensitivity</h5>' +
+          '<div class="table-scroll short"><table class="mini"><thead><tr><th class="num">Cut-off</th><th class="num">MIC ' + esc(pair.A.name) + '</th><th class="num">MIC ' + esc(pair.B.name) + '</th><th class="num">FICI<sub>min</sub></th><th>Class</th></tr></thead><tbody>' + cutRows + '</tbody></table></div>' +
+          '<h5>3. Time sensitivity (at ' + Math.round(res.cutoff * 100) + '%)</h5>' +
+          (timeRows
+            ? '<div class="table-scroll"><table class="mini"><thead><tr><th class="num">Time</th><th>Read</th><th class="num">MIC ' + esc(pair.A.name) + '</th><th class="num">MIC ' + esc(pair.B.name) + '</th><th class="num">FICI<sub>min</sub></th><th>Class</th></tr></thead><tbody>' + timeRows + '</tbody></table></div>' +
+              '<p class="muted small">Single reads, plus one kinetic cycle per hour.</p>'
+            : '<p class="muted small">Only one read after t0.</p>') +
+          '<h5>5. Dilution error</h5>' + dilHtml +
+        '</section>';
+
+      const slider = card.querySelector('#cutoff');
+      slider.addEventListener('input', () => { card.querySelector('output').textContent = Math.round(slider.value * 100) + '%'; });
+      slider.addEventListener('change', () => { settings.cutoff = +slider.value; renderResults(); const s = $('cutoff'); if (s) s.focus(); });
+
+      const inh = res.analysis.inhibited;
+      card.querySelector('.heatmap-wrap').appendChild(heatmap({
+        a: a, rows: range(l.nRows), cols: range(l.nCols), label: 'Percent growth heatmap',
+        cell: (r, c) => Object.assign(growthColour(a.corr.frac[r][c]), { value: fmtPct(a.corr.frac[r][c]) }),
+        info: (r, c) => wellInfo(a, r, c),
+        overlay: (svg, gm) => {
+          const isInh = (r, c) => r >= 0 && c >= 0 && r < l.nRows && c < l.nCols && inh[r][c];
+          let d = '';
+          for (let r = 0; r < l.nRows; r++) {
+            for (let c = 0; c < l.nCols; c++) {
+              if (!inh[r][c]) continue;
+              const x = gm.x(c), y = gm.y(r);
+              if (!isInh(r - 1, c)) d += 'M' + x + ' ' + y + 'h' + CELL;
+              if (!isInh(r + 1, c)) d += 'M' + x + ' ' + (y + CELL) + 'h' + CELL;
+              if (!isInh(r, c - 1)) d += 'M' + x + ' ' + y + 'v' + CELL;
+              if (!isInh(r, c + 1)) d += 'M' + (x + CELL) + ' ' + y + 'v' + CELL;
+            }
+          }
+          if (d) svg.appendChild(el('path', { d: d, class: 'boundary' }));
+          if (res.ficiMin) {
+            // box the FICImin well and any boundary well tied with it
+            res.boundary.filter((w) => Math.abs(w.fici - res.ficiMin.fici) < 1e-12).forEach((w) => {
+              svg.appendChild(el('rect', { x: gm.x(w.c) + 3, y: gm.y(w.r) + 3, width: CELL - 6, height: CELL - 6, class: 'fici-min' }));
+            });
+          }
+        },
+      }));
+      addHeatmapTools(card.querySelector('.heatmap-wrap'), () => X.safeName(a.plate.name) + '_fici_heatmap',
+        () => [a.plate.name + ' · % growth', a.tx.file + ' (' + a.hours.toFixed(1) + ' h) · cut-off ' + Math.round(res.cutoff * 100) + '%']);
+    };
+
+    // ---------------- Bliss / HSA cards (same renderer)
+    function renderExcess(card, res, a, id) {
+      const l = a.layout, pair = a.pair, m = M.get(id);
+      const isBliss = id === 'bliss';
+      const win = res.max3x3At;
+      const winTxt = win
+        ? esc(pair.A.name) + ' ' + fmtConc(l.A[win.c]) + '–' + fmtConc(l.A[win.c + 2]) + ' × ' + esc(pair.B.name) + ' ' + fmtConc(l.B[win.r]) + '–' + fmtConc(l.B[win.r + 2])
+        : '';
+      card.innerHTML =
+        '<header class="card-head"><h3>' + esc(m.label) + '</h3></header>' +
+        '<p class="banner">' + esc(res.note) + '</p>' +
+        '<p class="muted small">Expected inhibition: ' + (isBliss ? 'E<sub>A</sub> + E<sub>B</sub> − E<sub>A</sub>·E<sub>B</sub>' : 'max(E<sub>A</sub>, E<sub>B</sub>)') +
+          ', with E = 1 − growth clipped to 0–1. Excess = observed − expected, in percentage points; positive means more inhibition than expected.</p>' +
+        '<dl class="summary">' +
+          '<div><dt>Mean excess (all combination wells)</dt><dd><strong>' + fmtPP2(res.meanPP) + ' pp</strong></dd></div>' +
+          '<div><dt>Max 3×3 window mean</dt><dd><strong>' + (res.max3x3PP === null ? '–' : fmtPP2(res.max3x3PP) + ' pp') + '</strong>' +
+            (win ? '<br><span class="small">' + winTxt + '</span>' : '<br><span class="small">Matrix too small for a 3×3 window.</span>') + '</dd></div>' +
+        '</dl>' +
+        '<div class="heatmap-wrap"></div>' +
+        '<div class="legend small">' +
+          '<span class="legend-item"><span class="ramp" aria-hidden="true"></span></span>' +
+          '<span class="legend-item">−' + EXCESS_SCALE_PP + ' pp (less inhibition than expected) · 0 grey · +' + EXCESS_SCALE_PP + ' pp (more inhibition than expected)</span>' +
+          (win ? '<span class="legend-item"><span class="key key-window"></span> Best 3×3 window</span>' : '') +
+        '</div>' +
+        '<p class="small muted">Combination wells only. Colour saturates at ±' + EXCESS_SCALE_PP + ' pp; printed values are not clipped.</p>';
+
+      const EX = res.excess; // [r-1][c-1]
+      card.querySelector('.heatmap-wrap').appendChild(heatmap({
+        a: a, rows: range(l.nRows, 1), cols: range(l.nCols, 1), label: m.label + ' heatmap in percentage points',
+        cell: (r, c) => Object.assign(excessColour(EX[r - 1][c - 1] * 100), { value: fmtPP(EX[r - 1][c - 1] * 100) }),
+        info: (r, c) => wellInfo(a, r, c, ['<strong>' + esc(m.label) + ' ' + fmtPP(EX[r - 1][c - 1] * 100) + ' pp</strong>']),
+        overlay: (svg, gm) => {
+          if (!win) return;
+          svg.appendChild(el('rect', { x: gm.x(win.c) + 1.5, y: gm.y(win.r) + 1.5, width: 3 * CELL - 3, height: 3 * CELL - 3, class: 'window' }));
+        },
+      }));
+      addHeatmapTools(card.querySelector('.heatmap-wrap'), () => X.safeName(a.plate.name) + '_' + id + '_heatmap',
+        () => [a.plate.name + ' · ' + m.label + ' (pp)', a.tx.file + ' (' + a.hours.toFixed(1) + ' h)']);
+    }
+    RENDERERS.bliss = renderExcess;
+    RENDERERS.hsa = renderExcess;
+
+    // ------------------------------------------------------------ group view (SPEC 10)
+    function renderGroupView() {
+      const gv = $('group-view');
+      const g = groupsNow().find((x) => x.key === view.key);
+      if (!g) { view = { type: 'plate' }; renderAll(); return; }
+      hideTip();
+
+      const members = g.plateIds.map((id) => plates.find((p) => p.id === id));
+      const rows = members.map((p) => ({ p, a: analyse(p) }));
+      const ok = rows.filter((r) => !r.a.empty);
+      const pooled = Pool.poolGroup(ok.map((r) => ({ plateId: r.p.id, results: r.a.results })), { sameConcs: g.sameConcs });
+      const pair = pairOf(members[0]);
+      const pf = pooled.methods.fici, pb = pooled.methods.bliss, ph = pooled.methods.hsa;
+      const pm = (x) => x.mean === null ? '–' : fmtPP2(x.mean) + (x.sd === null ? '' : ' ± ' + x.sd.toFixed(2));
+
+      const cols = [
+        ['Plate'], ['Date (t0)'], ['Read'],
+        ['MIC ' + esc(pair.A.name), 'num'], ['MIC ' + esc(pair.B.name), 'num'],
+        ['FICI<sub>min</sub> (well)', 'num'], ['FICI<sub>max</sub>', 'num'], ['Class'],
+        ['Bliss mean', 'num'], ['Bliss max 3×3', 'num'], ['HSA mean', 'num'], ['HSA max 3×3', 'num'],
+      ];
+      const micCell = (m) => !m ? '–' : (m.bound ? '&gt; ' + fmtConc(m.mic / 2) : fmtConc(m.mic));
+      const fi = (w) => !w ? '–' : (w.bound ? '≤ ' : '') + fmtFici(w.fici);
+
+      const body = rows.map(({ p, a }) => {
+        const open = '<button type="button" class="link" data-plate="' + esc(p.id) + '">' + esc(p.name) + '</button>';
+        if (a.empty) {
+          return '<tr><td>' + open + '</td><td colspan="' + (cols.length - 1) + '" class="muted">Not analysed: ' + esc(a.empty) + '</td></tr>';
+        }
+        const f = a.results.fici, b = a.results.bliss, h = a.results.hsa;
+        return '<tr><td>' + open + '</td>' +
+          '<td>' + fmtDate(a.t0.start) + '</td>' +
+          '<td class="num">' + a.hours.toFixed(1) + ' h</td>' +
+          '<td class="num">' + micCell(f && f.micA) + '</td><td class="num">' + micCell(f && f.micB) + '</td>' +
+          '<td class="num">' + (f ? fi(f.ficiMin) + (f.ficiMin ? ' <span class="small muted">' + L.matrixWellId(a.layout, f.ficiMin.r, f.ficiMin.c) + '</span>' : '') : '–') + '</td>' +
+          '<td class="num">' + (f ? fi(f.ficiMax) : '–') + '</td>' +
+          '<td>' + esc(f ? (f.class || 'none') : '–') + '</td>' +
+          '<td class="num">' + (b ? fmtPP2(b.meanPP) : '–') + '</td><td class="num">' + (b && b.max3x3PP !== null ? fmtPP2(b.max3x3PP) : '–') + '</td>' +
+          '<td class="num">' + (h ? fmtPP2(h.meanPP) : '–') + '</td><td class="num">' + (h && h.max3x3PP !== null ? fmtPP2(h.max3x3PP) : '–') + '</td></tr>';
+      }).join('');
+
+      const pooledRow = '<tr class="pooled"><th scope="row">Pooled (n = ' + pooled.n + ')</th><td></td><td></td><td></td><td></td>' +
+        '<td class="num">' + (pf && pf.medianFiciMin !== null ? 'median ' + (pf.anyBound ? '≤ ' : '') + fmtFici(pf.medianFiciMin) +
+          '<br><span class="small">range ' + fmtFici(pf.min) + '–' + fmtFici(pf.max) + '</span>' : '–') + '</td><td></td>' +
+        '<td>' + (pf && pf.class ? '<strong>' + esc(pf.class) + '</strong><br><span class="small">' + esc(pf.consistency) + '</span>' : '–') + '</td>' +
+        '<td class="num">' + (pb ? pm(pb.meanPP) : '–') + '</td><td class="num">' + (pb ? pm(pb.max3x3PP) : '–') + '</td>' +
+        '<td class="num">' + (ph ? pm(ph.meanPP) : '–') + '</td><td class="num">' + (ph ? pm(ph.max3x3PP) : '–') + '</td></tr>';
+
+      gv.innerHTML =
+        '<div class="plate-head"><h2>' + esc(g.label) + '</h2></div>' +
+        '<p class="banner"><strong>n = ' + pooled.n + '</strong> plate' + (pooled.n === 1 ? '' : 's') + ' analysed' +
+          (pooled.message ? '. ' + esc(pooled.message) : '.') + '</p>' +
+        (g.custom && !g.sameConcs ? '<p class="msg msg-warn">This custom group mixes concentration lists. Summary scores are pooled, but heatmaps are not averaged.</p>' : '') +
+        (ok.length < rows.length ? '<p class="msg msg-warn">' + (rows.length - ok.length) + ' plate(s) could not be analysed and are left out of the pooled row.</p>' : '') +
+        '<p class="muted small">All plates use the current settings: cut-off ' + Math.round(settings.cutoff * 100) + '%, ' +
+          (settings.useT0 ? 't0 subtracted' : 'no t0 subtraction') + ', ' + (settings.useDrift ? 'drift subtracted' : 'no drift subtraction') +
+          ', reference ' + (settings.reference === 'drugfree' ? 'drug-free well' : 'solvent-free mean') + '. Each plate is analysed at its own chosen read.</p>' +
+        '<section class="card"><div class="card-head"><h3>Per plate and pooled</h3><button type="button" id="exp-pooled" class="secondary">Pooled CSV</button></div>' +
+          '<div class="table-scroll tall"><table class="group-table"><thead><tr>' +
+            cols.map((c) => '<th scope="col"' + (c[1] ? ' class="num"' : '') + '>' + c[0] + '</th>').join('') +
+          '</tr></thead><tbody>' + body + '</tbody><tfoot>' + pooledRow + '</tfoot></table></div>' +
+          '<p class="small muted">FICI: median FICI<sub>min</sub>, range and n, with the class taken from the median (Odds 2003). Bliss and HSA: mean ± SD of the per-plate scores, in percentage points. ' +
+            'FICI and Bliss/HSA can disagree on the same data.</p>' +
+        '</section>' +
+        '<div id="group-heatmaps"></div>';
+
+      $('exp-pooled').addEventListener('click', () => {
+        const entries = ok.map((r) => ({ plateName: r.p.name, results: r.a.results }));
+        X.download(X.pooledCSV(entries, pooled, g.label), X.safeName(g.label) + '_pooled.csv', 'text/csv;charset=utf-8');
+      });
+      gv.querySelectorAll('button[data-plate]').forEach((b) => b.addEventListener('click', () => {
+        selectPlate(plates.find((p) => p.id === b.dataset.plate));
+      }));
+
+      // well-by-well averaged excess heatmaps (identical concentrations only)
+      const hm = $('group-heatmaps');
+      [['bliss', pb], ['hsa', ph]].forEach(([id, pr]) => {
+        if (!pr) return;
+        const card = document.createElement('section');
+        card.className = 'card';
+        const m = M.get(id);
+        card.innerHTML = '<h3>' + esc(m.label) + ': mean of ' + pr.n + ' plate' + (pr.n === 1 ? '' : 's') + '</h3>';
+        hm.appendChild(card);
+        if (!pr.avgExcess) { card.insertAdjacentHTML('beforeend', '<p class="muted">' + esc(pr.avgReason) + '</p>'); return; }
+        const layout = currentLayout(members[0]);
+        const EX = pr.avgExcess;
+        const wrap = document.createElement('div');
+        wrap.className = 'heatmap-wrap';
+        card.appendChild(wrap);
+        wrap.appendChild(heatmap({
+          a: { layout }, pair: pair, rows: range(layout.nRows, 1), cols: range(layout.nCols, 1),
+          label: m.label + ', mean over plates, in percentage points',
+          cell: (r, c) => Object.assign(excessColour(EX[r - 1][c - 1] * 100), { value: fmtPP(EX[r - 1][c - 1] * 100) }),
+          info: (r, c) => '<strong>' + L.matrixWellId(layout, r, c) + '</strong><br>' +
+            esc(pair.A.name) + ' ' + layout.A[c] + ' ' + esc(pair.A.unit) + ', ' + esc(pair.B.name) + ' ' + layout.B[r] + ' ' + esc(pair.B.unit) +
+            '<br>Mean excess ' + fmtPP(EX[r - 1][c - 1] * 100) + ' pp over ' + pr.n + ' plate' + (pr.n === 1 ? '' : 's'),
+        }));
+        addHeatmapTools(wrap, X.safeName(g.label) + '_' + id + '_mean_heatmap', [g.label, m.label + ' (pp), mean of ' + pr.n + ' plates']);
+        card.insertAdjacentHTML('beforeend', '<p class="small muted">Diverging scale, grey at 0, saturating at ±' + EXCESS_SCALE_PP + ' pp. ' + esc(m.NOTE) + '</p>');
+      });
+    }
+
+    // ------------------------------------------------------------ exports (SPEC 12)
+    // Light theme for exported figures: the page's CSS (and its dark mode) does not travel with the file.
+    const EXPORT_CSS =
+      'text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
+      '.tick{font-size:11px;fill:#5a6573}.axis-title{font-size:12px;font-weight:600;fill:#17202a}' +
+      '.cell-val{font-size:12px}.gridlines line{stroke:#ffffff;stroke-width:1}' +
+      '.boundary{fill:none;stroke:#111111;stroke-width:3;stroke-linecap:square}' +
+      '.fici-min{fill:none;stroke:#d4500b;stroke-width:3;stroke-dasharray:6 3}' +
+      '.window{fill:none;stroke:#111111;stroke-width:3;stroke-dasharray:2 3}' +
+      '.caption{font-size:13px;font-weight:600;fill:#17202a}.caption-sub{font-weight:400;fill:#5a6573;font-size:12px}';
+
+    function addHeatmapTools(wrap, baseNameArg, captionArg) {
+      let baseName = '';
+      const svg = wrap.querySelector('svg');
+      if (!svg) return;
+      const bar = document.createElement('div');
+      bar.className = 'export-bar';
+      bar.innerHTML = '<button type="button" class="secondary" data-fmt="svg">Download SVG</button>' +
+        '<button type="button" class="secondary" data-fmt="png">Download PNG</button>';
+      bar.addEventListener('click', async (e) => {
+        const fmt = e.target.dataset && e.target.dataset.fmt;
+        if (!fmt) return;
+        const w = +svg.getAttribute('width'), h = +svg.getAttribute('height');
+        const now = (v) => (typeof v === 'function' ? v() : v); // names are read at click time (plates can be renamed)
+        baseName = now(baseNameArg);
+        const cap = now(captionArg);
+        const text = X.standaloneSVG(svg.outerHTML, w, h, EXPORT_CSS, cap);
+        if (fmt === 'svg') { X.download(text, baseName + '.svg', 'image/svg+xml'); return; }
+        try { X.download(await X.svgToPng(text, w, h + X.captionHeight(cap), 2), baseName + '.png'); }
+        catch (err) { e.target.textContent = 'PNG failed'; }
+      });
+      wrap.after(bar);
+    }
+
+    function exportMsg(kind, text) {
+      const m = $('export-msg');
+      m.hidden = !text; m.className = 'msg msg-' + kind; m.textContent = text || '';
+    }
+
+    function exportPlateCSV(kind) {
+      const a = analyse();
+      if (a.empty) { exportMsg('warn', a.empty); return; }
+      exportMsg('ok', '');
+      const base = X.safeName(plate.name);
+      if (kind === 'growth') {
+        X.download(X.growthCSV({ layout: a.layout, pair: a.pair, corr: a.corr }), base + '_growth.csv', 'text/csv;charset=utf-8');
+      } else {
+        X.download(X.resultsCSV({ plateName: plate.name, layout: a.layout, pair: a.pair, t0: a.t0, tx: a.tx, hours: a.hours,
+          settings, corr: a.corr, results: a.results }), base + '_results.csv', 'text/csv;charset=utf-8');
+      }
+    }
+
+    // ------------------------------------------------------------ session export / import
+    function sessionMsg(kind, text) {
+      const m = $('session-msg');
+      m.hidden = !text; m.className = 'msg msg-' + kind; m.textContent = text || '';
+    }
+
+    function exportSession() {
+      const json = X.sessionToJSON({ settings, enabled, layouts: customLayouts, plates });
+      const d = new Date();
+      X.download(JSON.stringify(json), 'checkerboard-session_' + fmtDate(d) + '.json', 'application/json');
+      sessionMsg('ok', 'Session exported: ' + plates.length + ' plate' + (plates.length === 1 ? '' : 's') + '.');
+    }
+
+    async function importSession(file) {
+      let s;
+      try {
+        s = X.sessionFromJSON(JSON.parse(await file.text()), (id) => !!L.getPreset(id));
+      } catch (e) {
+        sessionMsg('error', file.name + ': ' + e.message + ' Nothing was changed.');
+        return;
+      }
+      const hasData = plates.some((p) => p.reads.length);
+      if (hasData && !window.confirm('Replace the plates open now with the ' + s.plates.length + ' plate(s) in "' + file.name + '"?')) return;
+      s.layouts.forEach((l) => {
+        const i = customLayouts.findIndex((x) => x.id === l.id);
+        if (i >= 0) customLayouts[i] = l; else customLayouts.push(l);
+      });
+      if (s.layouts.length) saveCustomLayouts();
+      plates.length = 0;
+      s.plates.forEach((p) => plates.push(Object.assign(p, { messages: [] })));
+      if (!plates.length) plates.push(newPlate());
+      Object.assign(settings, s.settings);
+      Object.keys(enabled).forEach((k) => { if (k in s.enabled) enabled[k] = s.enabled[k]; });
+      editor = null; renderEditor();
+      sessionMsg('ok', 'Imported ' + s.plates.length + ' plate' + (s.plates.length === 1 ? '' : 's') + ' from ' + file.name + '. Results were recomputed from the raw reads.');
+      selectPlate(plates[0]);
+    }
+
+    function initExports() {
+      $('exp-growth').addEventListener('click', () => exportPlateCSV('growth'));
+      $('exp-results').addEventListener('click', () => exportPlateCSV('results'));
+      $('session-export').addEventListener('click', exportSession);
+      const si = $('session-import');
+      si.addEventListener('change', () => { if (si.files[0]) importSession(si.files[0]); si.value = ''; });
+    }
+
+    // ------------------------------------------------------------ boot
+    function renderAll() {
+      renderSidebar();
+      const pv = $('plate-view'), gv = $('group-view');
+      if (view.type === 'group') {
+        pv.hidden = true; gv.hidden = false;
+        renderGroupView();
+        return;
+      }
+      pv.hidden = false; gv.hidden = true;
+      renderPlateControls();
+      renderFileMessages();
+      renderReads();
+      renderLayoutSummary();
+      renderResults();
+    }
+    loadCustomLayouts();
+    plates.push(newPlate());
+    plate = plates[0];
+    initControls();
+    initExports();
+    renderAll();
+  })();
+  </script>
+</body>
+</html>

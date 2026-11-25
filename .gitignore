@@ -1,0 +1,9 @@
+# Raw assay data are unpublished lab data: never commit them (SPEC section 2).
+tests/fixtures/
+data/
+
+.DS_Store
+node_modules/
+.venv/
+_site/
+.claude/settings.local.json
