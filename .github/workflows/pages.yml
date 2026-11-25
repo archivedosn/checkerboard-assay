@@ -32,6 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read   # needed to check out a private repository (job permissions replace the workflow's)
+      actions: read    # needed by deploy-pages to find the uploaded site artifact in a private repository
       pages: write
       id-token: write
     environment:
