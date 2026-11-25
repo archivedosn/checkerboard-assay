@@ -31,6 +31,7 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     permissions:
+      contents: read   # needed to check out a private repository (job permissions replace the workflow's)
       pages: write
       id-token: write
     environment:
